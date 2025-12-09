@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { formatDistanceToNow, format } from "date-fns";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import DOMPurify from "dompurify";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,6 +18,8 @@ import {
   Rss,
   Link2,
   Check,
+  FileText,
+  Loader2,
 } from "lucide-react";
 import { SiX, SiLinkedin, SiFacebook } from "react-icons/si";
 import { Mail } from "lucide-react";
@@ -36,6 +40,9 @@ interface ArticleReaderProps {
 
 export function ArticleReader({ articleId, onClose }: ArticleReaderProps) {
   const { toast } = useToast();
+  const [extractedContent, setExtractedContent] = useState<string | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  
   const { data: article, isLoading } = useQuery<ArticleWithFeed>({
     queryKey: ["/api/articles", articleId],
     queryFn: async () => {
@@ -104,6 +111,45 @@ export function ArticleReader({ articleId, onClose }: ArticleReaderProps) {
       const body = encodeURIComponent(`Check out this article: ${article.url}`);
       window.open(`mailto:?subject=${subject}&body=${body}`, "_blank");
     }
+  };
+
+  const handleExtractContent = async () => {
+    if (!article) return;
+    setIsExtracting(true);
+    try {
+      const response = await fetch(`/api/extract?url=${encodeURIComponent(article.url)}`);
+      if (!response.ok) throw new Error("Failed to extract content");
+      const data = await response.json();
+      if (data.content) {
+        setExtractedContent(data.content);
+        toast({
+          title: "Full article loaded",
+          description: "The complete article content has been extracted.",
+        });
+      } else {
+        toast({
+          title: "Could not extract content",
+          description: "The original article may be behind a paywall or restricted.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Extraction failed",
+        description: "Could not load the full article content.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  // Sanitize HTML content to prevent XSS attacks
+  const sanitizeHtml = (html: string) => {
+    return DOMPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      ADD_ATTR: ['target'],
+    });
   };
 
   if (isLoading) {
@@ -279,25 +325,77 @@ export function ArticleReader({ articleId, onClose }: ArticleReaderProps) {
             </div>
           )}
 
-          <div className="prose prose-lg dark:prose-invert max-w-none">
-            {article.content ? (
-              <div
-                dangerouslySetInnerHTML={{ __html: article.content }}
-              />
+          <div className="prose prose-lg dark:prose-invert max-w-none
+            prose-img:rounded-xl prose-img:shadow-lg prose-img:mx-auto
+            prose-headings:font-bold prose-headings:tracking-tight
+            prose-a:text-primary prose-a:no-underline hover:prose-a:underline">
+            {extractedContent ? (
+              <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(extractedContent) }} />
+            ) : article.content ? (
+              <>
+                <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(article.content) }} />
+                <div className="mt-6 pt-4 border-t not-prose">
+                  <Button
+                    variant="outline"
+                    onClick={handleExtractContent}
+                    disabled={isExtracting}
+                    data-testid="button-extract-content"
+                  >
+                    {isExtracting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <FileText className="h-4 w-4 mr-2" />
+                    )}
+                    {isExtracting ? "Loading..." : "Load Full Article"}
+                  </Button>
+                </div>
+              </>
             ) : article.summary ? (
-              <p className="text-lg leading-relaxed">{article.summary}</p>
+              <>
+                <p className="text-lg leading-relaxed">{article.summary}</p>
+                <div className="mt-6 pt-4 border-t not-prose">
+                  <Button
+                    variant="outline"
+                    onClick={handleExtractContent}
+                    disabled={isExtracting}
+                    data-testid="button-extract-content"
+                  >
+                    {isExtracting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <FileText className="h-4 w-4 mr-2" />
+                    )}
+                    {isExtracting ? "Loading..." : "Load Full Article"}
+                  </Button>
+                </div>
+              </>
             ) : (
               <div className="text-center py-8">
                 <p className="text-muted-foreground mb-4">
-                  Full content not available. Visit the original article for more.
+                  Full content not available.
                 </p>
-                <Button
-                  onClick={() => window.open(article.url, "_blank")}
-                  data-testid="button-read-original"
-                >
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  Read Original
-                </Button>
+                <div className="flex gap-2 justify-center">
+                  <Button
+                    variant="outline"
+                    onClick={handleExtractContent}
+                    disabled={isExtracting}
+                    data-testid="button-extract-content"
+                  >
+                    {isExtracting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <FileText className="h-4 w-4 mr-2" />
+                    )}
+                    {isExtracting ? "Loading..." : "Load Full Article"}
+                  </Button>
+                  <Button
+                    onClick={() => window.open(article.url, "_blank")}
+                    data-testid="button-read-original"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Read Original
+                  </Button>
+                </div>
               </div>
             )}
           </div>

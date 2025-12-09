@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/lib/theme-provider";
+import { GlobalLoadingIndicator } from "@/components/global-loading-indicator";
 import Home from "@/pages/home";
 import NotFound from "@/pages/not-found";
 
@@ -21,6 +22,7 @@ function App() {
     <ThemeProvider defaultTheme="system" storageKey="modernfeed-theme">
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
+          <GlobalLoadingIndicator />
           <Toaster />
           <Router />
         </TooltipProvider>

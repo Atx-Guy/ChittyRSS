@@ -1,0 +1,91 @@
+but it currently fails in two critical dimensions: security (unsafe HTML rendering) and scalability (serial processing of feeds). The interface, while clean, lacks the refined typographic detailing and micro-interactions expected of a premium reading experience.
+
+Here are the 6 design implementations I would execute immediately to elevate this from a prototype to a production-grade product.
+Phase 1: Critical Architecture & Security (The Engine)
+1. Security Design: Implement HTML Sanitization
+
+Problem: The ArticleReader component currently uses dangerouslySetInnerHTML directly with feed content. RSS feeds are untrusted external inputs; this is a textbook Stored XSS vulnerability. Implementation: Introduce dompurify to strip malicious scripts while preserving safe formatting.
+TypeScript
+
+// client/src/components/article-reader.tsx
+import DOMPurify from "dompurify";
+
+// ... inside the component
+const cleanContent = DOMPurify.sanitize(article.content, {
+  USE_PROFILES: { html: true }, // Only allow HTML
+  ADD_ATTR: ['target'],         // Allow links to open in new tabs
+});
+
+// usage
+<div dangerouslySetInnerHTML={{ __html: cleanContent }} />
+
+2. System Design: Concurrent Feed Refreshing
+
+Problem: The /api/feeds/refresh endpoint processes feeds serially (one after another). As the user adds more feeds, this request will eventually time out or hang the server. Implementation: Refactor the route to process feeds in parallel batches (limiting concurrency to avoid overwhelming resources).
+TypeScript
+
+// server/routes.ts
+// Helper for concurrency control
+async function mapConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const results = [];
+  const executing = [];
+  for (const item of items) {
+    const p = Promise.resolve().then(() => fn(item));
+    results.push(p);
+    const e = p.then(() => executing.splice(executing.indexOf(e), 1));
+    executing.push(e);
+    if (executing.length >= limit) await Promise.race(executing);
+  }
+  return Promise.all(results);
+}
+
+// In /api/feeds/refresh:
+// Process 5 feeds at a time instead of 1
+const results = await mapConcurrency(feeds, 5, async (feed) => {
+    // ... existing parse logic ...
+});
+
+Phase 2: Interface & Experience (The Polish)
+3. Visual Design: Typographic Hierarchy & Readability
+
+Problem: The current prose class is generic. The reading container is likely too narrow (max-w-prose) for desktop users, and images inside articles may break the layout or look unpolished. Implementation:
+
+    Widen the reading column to max-w-3xl for better immersion.
+
+    Style images within the content to have rounded corners and subtle shadows.
+
+    Increase base font size and line height for long-form reading.
+
+TypeScript
+
+// client/src/components/article-reader.tsx
+<div className="prose prose-lg dark:prose-invert max-w-3xl mx-auto
+  prose-img:rounded-xl prose-img:shadow-lg prose-img:mx-auto
+  prose-headings:font-bold prose-headings:tracking-tight
+  prose-a:text-primary prose-a:no-underline hover:prose-a:underline">
+  {/* Content */}
+</div>
+
+4. UX Design: Sticky Sidebar Headers & Scroll Isolation
+
+Problem: In AppSidebar, if a user has many feeds, scrolling down to find one might scroll the entire sidebar, potentially hiding the "Add Feed" or "Settings" buttons. Implementation:
+
+    Make SidebarHeader and SidebarFooter sticky or fixed.
+
+    Ensure only the SidebarContent (the feed list) is scrollable.
+
+    Add overflow-y-auto to the feed list container specifically.
+
+5. Interaction Design: Global Loading State
+
+Problem: The current refresh button spins, but if a background refresh happens or the user navigates, there's no subtle indication that data is being fetched. Implementation: Add a top-aligned, indeterminate progress bar (like YouTube or GitHub) that triggers whenever isFetching is true in React Query. This provides system status visibility without layout shift or intrusive spinners.
+Phase 3: The "Level Up" (The Innovation)
+6. Product Design: "Reader Mode" Extraction
+
+Problem: Many RSS feeds only provide a truncated summary (e.g., "Read more..."), forcing users to leave your app to read the full article. This breaks the flow. Implementation: Create an "Extract Full Content" feature.
+
+    Backend: Add an endpoint /api/extract?url=... that uses Mozilla's @mozilla/readability and jsdom to fetch and parse the original article URL.
+
+    Frontend: Add a button in the ArticleReader (e.g., "Load Full View") that swaps the truncated RSS summary with the scraped full-text content.
+
+Why this matters: This transforms "ChittyRSS" from a simple link aggregator into a true content consumption engine.

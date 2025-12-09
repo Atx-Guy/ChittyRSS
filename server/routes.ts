@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import Parser from "rss-parser";
+import { JSDOM } from "jsdom";
+import { Readability } from "@mozilla/readability";
 import { insertFeedSchema, insertCategorySchema } from "@shared/schema";
 
 const parser = new Parser({
@@ -43,6 +45,29 @@ async function parseFeed(url: string) {
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "Failed to parse feed" };
   }
+}
+
+// Concurrent processing with limit
+async function mapConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  const executing: Promise<void>[] = [];
+  
+  for (const item of items) {
+    const p = Promise.resolve().then(() => fn(item)).then(result => {
+      results.push(result);
+    });
+    const e = p.then(() => {
+      executing.splice(executing.indexOf(e), 1);
+    });
+    executing.push(e);
+    
+    if (executing.length >= limit) {
+      await Promise.race(executing);
+    }
+  }
+  
+  await Promise.all(executing);
+  return results;
 }
 
 // Normalize a URL - add protocol if missing
@@ -352,18 +377,18 @@ export async function registerRoutes(
   app.post("/api/feeds/refresh", async (_req, res) => {
     try {
       const feeds = await storage.getFeeds();
+      const activeFeeds = feeds.filter(f => f.isActive);
       let totalNewArticles = 0;
 
-      for (const feed of feeds) {
-        if (!feed.isActive) continue;
-
+      // Process 5 feeds concurrently for better performance
+      await mapConcurrency(activeFeeds, 5, async (feed) => {
         try {
           const result = await parseFeed(feed.url);
           if (!result.success || !result.feed) {
             await storage.updateFeed(feed.id, { 
               errorCount: (feed.errorCount || 0) + 1 
             });
-            continue;
+            return;
           }
 
           const items = result.feed.items || [];
@@ -399,7 +424,7 @@ export async function registerRoutes(
             errorCount: (feed.errorCount || 0) + 1 
           });
         }
-      }
+      });
 
       res.json({ success: true, newArticles: totalNewArticles });
     } catch (error) {
@@ -670,6 +695,51 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error importing OPML:", error);
       res.status(500).json({ error: "Failed to import OPML" });
+    }
+  });
+
+  // Article content extraction endpoint (Reader Mode)
+  app.get("/api/extract", async (req, res) => {
+    try {
+      const { url } = req.query;
+      
+      if (!url || typeof url !== "string") {
+        return res.status(400).json({ error: "URL is required" });
+      }
+
+      // Fetch the article page
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; ModernFeed/1.0)",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!response.ok) {
+        return res.status(400).json({ error: "Failed to fetch article" });
+      }
+
+      const html = await response.text();
+      
+      // Parse with Readability
+      const dom = new JSDOM(html, { url });
+      const reader = new Readability(dom.window.document);
+      const article = reader.parse();
+
+      if (!article) {
+        return res.json({ content: null, title: null });
+      }
+
+      res.json({
+        content: article.content,
+        title: article.title,
+        excerpt: article.excerpt,
+        byline: article.byline,
+        siteName: article.siteName,
+      });
+    } catch (error) {
+      console.error("Error extracting article:", error);
+      res.status(500).json({ error: "Failed to extract article content" });
     }
   });
 
